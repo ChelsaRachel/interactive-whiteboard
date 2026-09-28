@@ -8,6 +8,11 @@ Riset internal: papan tulis digital untuk matematika SMA, meniru demo di `docs/l
 - **Bola dalam / bola luar** untuk kubus (dan bola luar untuk balok).
 - **Asisten AI** (Gemini) yang membaca isi papan, menjelaskan, dan bisa mengubah grafik ("buat parabolanya lebih lebar").
 - **Dua bahasa** (Indonesia/Inggris) lewat tombol ID | EN.
+- **Perintah suara** (tombol 🎤 atau tombol `M`, Chrome/Edge). Hemat token: hanya pertanyaan bebas yang dikirim ke Gemini.
+  - Dikte rumus, diproses lokal: "y sama dengan x kuadrat kurang tiga", "y sama dengan a sin x tambah b", "y equals x squared minus 3".
+  - Perintah, diproses lokal: "urungkan", "ulangi", "hapus papan", "buat kubus/balok/limas/prisma", "bola dalam", "bola luar", "hilangkan bola", "hapus titik", "putar ke kiri/kanan/atas/bawah", "tampilkan titik penting", "perbesar", "perkecil", "pena", "penghapus", "laso", "diam".
+  - Pertanyaan ("jelaskan grafik ini") → asisten AI, dan jawabannya dibacakan (tombol 🔊 di tiap jawaban). Rumus dibacakan sebagai kata ("x kuadrat kurang 3").
+  - Pengenal suara memakai Web Speech API bawaan browser (gratis, tapi butuh internet; di Chrome audio diproses server Google). Mikrofon hanya diizinkan di `localhost` atau HTTPS.
 
 ## Menjalankan
 
@@ -39,10 +44,11 @@ frontend/ (React + Vite + TypeScript)
   src/math/         parser LaTeX → fungsi (toleran terhadap keluaran model), titik penting
   src/geometry/     bangun ruang, irisan bidang, pengenal sketsa (aturan geometri)
   src/widgets/      widget grafik, bangun ruang (Three.js), irisan
+  src/voice/        pengenal suara (Web Speech API), penafsir perintah/dikte rumus, pembaca jawaban
   src/i18n.tsx      kamus ID/EN
 backend/ (FastAPI, uv, Python 3.12)
   app/recognizer.py pengenal rumus ONNX (encoder–decoder, greedy decoding, CPU)
-  app/ai.py         proxy Gemini generateContent dengan keluaran JSON terstruktur
+  app/ai.py         proxy Gemini generateContent dengan keluaran JSON terstruktur (4 pesan terakhir saja)
 models/             model yang diunduh (tidak di-commit)
   pix2text-mfr-1.5/ MIT
   texteller/        Apache-2.0

@@ -4,5 +4,4 @@ backend/.venv/
 backend/.env
 models/
 docs
-docs copy
 __pycache__/

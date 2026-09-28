@@ -8,6 +8,7 @@ import os
 import httpx
 
 GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+HISTORY_LIMIT = 4
 
 SYSTEM_PROMPT = """You are the teaching assistant inside a digital whiteboard for high-school mathematics.
 Teachers handwrite functions such as y = x^2 - 3 or y = A sin x + B; the board plots them with sliders
@@ -22,7 +23,7 @@ Always answer in the language given by "lang" ("id" = Bahasa Indonesia, "en" = E
 short and classroom-friendly (at most about 120 words), and write math in LaTeX wrapped in $...$.
 
 You may change the board by returning actions:
-- set_param: change a slider. Needs graph_id, function_id, param, value.
+- set_param: change a slider. Always include graph_id, function_id, param (the letter) and value.
 - add_function: plot a new function y = f(x) on an existing graph. Needs graph_id and latex (right-hand
   side only, e.g. "2x^2+1", or a full "y=..." expression).
 - update_function: replace a function's formula. Needs graph_id, function_id and latex.
@@ -77,10 +78,12 @@ async def chat(messages: list[dict], board: dict, lang: str) -> dict:
         raise AiError("GEMINI_API_KEY belum diatur di backend/.env", status=503)
     model = ai_config()["model"]
 
+    # Hemat token: hanya beberapa pesan terakhir yang dikirim ke Gemini.
+    recent = messages[-HISTORY_LIMIT:]
     contents = []
-    for i, m in enumerate(messages[-12:]):
+    for i, m in enumerate(recent):
         text = m.get("content", "")
-        if i == len(messages[-12:]) - 1 and m.get("role") == "user":
+        if i == len(recent) - 1 and m.get("role") == "user":
             text = f"lang: {lang}\nboard state:\n{json.dumps(board, ensure_ascii=False)}\n\nteacher: {text}"
         contents.append({"role": "model" if m.get("role") == "assistant" else "user", "parts": [{"text": text}]})
 

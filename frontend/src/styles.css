@@ -879,3 +879,61 @@ input {
     height: 42px;
   }
 }
+
+/* ---------- suara ---------- */
+.tool-btn.listening,
+.icon-btn.listening {
+  background: #ff4d6d;
+  color: #fff;
+  animation: pulse 1.2s ease-in-out infinite;
+}
+@keyframes pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(255, 77, 109, 0.55);
+  }
+  50% {
+    box-shadow: 0 0 0 8px rgba(255, 77, 109, 0);
+  }
+}
+.voice-bubble {
+  position: absolute;
+  left: 50%;
+  bottom: 72px;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: min(640px, calc(100vw - 32px));
+  padding: 10px 16px;
+  background: var(--panel-solid);
+  border: 1px solid rgba(255, 77, 109, 0.5);
+  border-radius: 999px;
+  box-shadow: var(--shadow);
+  z-index: 2500;
+}
+.voice-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #ff4d6d;
+  flex-shrink: 0;
+  animation: pulse 1.2s ease-in-out infinite;
+}
+.welcome p + p {
+  margin-top: 8px;
+}
+.ai-msg.assistant {
+  position: relative;
+  padding-right: 34px;
+}
+.speak-btn {
+  position: absolute;
+  top: 6px;
+  right: 4px;
+  opacity: 0.7;
+}
+.speak-btn:hover,
+.speak-btn.active {
+  opacity: 1;
+}

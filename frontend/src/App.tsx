@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import {
-  Box, ChartSpline, Eraser, Languages, Lasso, Loader2, Pen, Redo2, Settings, Sigma, Sparkles, Trash2, Undo2, X,
+  Box, ChartSpline, Eraser, Languages, Lasso, Loader2, Mic, Pen, Redo2, Settings, Sigma, Sparkles, Trash2, Undo2, X,
 } from "lucide-react";
 import {
   FUNCTION_COLORS, emptyBoard, historyReducer, uid,
@@ -11,13 +11,16 @@ import { renderStrokesToPng, splitIntoLines, strokeBBox, unionBBox, type BBox, t
 import { GraphWidgetView, DEFAULT_VIEW } from "./widgets/GraphWidgetView";
 import { SolidWidgetView } from "./widgets/SolidWidgetView";
 import { SectionWidgetView } from "./widgets/SectionWidgetView";
-import { initialRotation } from "./widgets/solidScene";
+import { initialRotation, rotateBy } from "./widgets/solidScene";
 import { FormulaDialog, RecognizeDialog, SolidChooser, type RecognizedItem } from "./components/Dialogs";
 import { AiPanel, type ChatMessage } from "./components/AiPanel";
 import { api, type AiAction, type Health } from "./api";
 import { parseFunction, substituteTex, type ParsedFunction } from "./math/latex";
 import { guessSolidFromSketch } from "./geometry/sketch";
-import { buildSolid, type SolidType } from "./geometry/solids";
+import { buildSolid, sphereOptions, type SolidType } from "./geometry/solids";
+import { interpretVoice } from "./voice/commands";
+import { useSpeechRecognition } from "./voice/speech";
+import { speak, stopSpeaking } from "./voice/tts";
 import { computeSection, type EdgePoint } from "./geometry/section";
 import { useI18n, type TKey } from "./i18n";
 
@@ -96,6 +99,7 @@ export default function App() {
   const [aiOpen, setAiOpen] = useState(false);
   const [aiBusy, setAiBusy] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [speakingIdx, setSpeakingIdx] = useState<number | null>(null);
   const toastTimer = useRef<number>(0);
 
   const showToast = useCallback((text: string, error = false) => {
@@ -247,11 +251,16 @@ export default function App() {
         }
         const g = pickGraph(a.graph_id);
         if (!g) continue;
-        const idx = g.functions.findIndex((f) => f.id === a.function_id || (!a.function_id && a.param && a.param in f.params));
+        // Gemini kadang tidak menyertakan function_id/param; tebak bila tidak ambigu.
+        let idx = g.functions.findIndex((f) => f.id === a.function_id);
+        if (idx < 0 && a.param) idx = g.functions.findIndex((f) => a.param! in f.params);
+        if (idx < 0 && g.functions.length === 1) idx = 0;
         if (idx < 0) continue;
         const f = g.functions[idx];
-        if (a.type === "set_param" && a.param && typeof a.value === "number") {
-          g.functions[idx] = { ...f, params: { ...f.params, [a.param]: a.value } };
+        const names = Object.keys(f.params);
+        const param = a.param && a.param in f.params ? a.param : names.length === 1 ? names[0] : undefined;
+        if (a.type === "set_param" && param && typeof a.value === "number") {
+          g.functions[idx] = { ...f, params: { ...f.params, [param]: a.value } };
           count++;
         } else if (a.type === "update_function" && a.latex) {
           g.functions[idx] = makeFunction(parseFunction(a.latex), idx, f);
@@ -270,7 +279,17 @@ export default function App() {
     return count;
   };
 
-  const sendToAi = async (text: string) => {
+  const speakMessage = (i: number, text: string) => {
+    if (speakingIdx === i) {
+      stopSpeaking();
+      setSpeakingIdx(null);
+      return;
+    }
+    setSpeakingIdx(i);
+    speak(text, lang, () => setSpeakingIdx((cur) => (cur === i ? null : cur)));
+  };
+
+  const sendToAi = async (text: string, opts: { speak?: boolean } = {}) => {
     const next: ChatMessage[] = [...messages, { role: "user", content: text }];
     setMessages(next);
     setAiBusy(true);
@@ -282,12 +301,96 @@ export default function App() {
       );
       const applied = applyAiActions(res.actions ?? []);
       setMessages([...next, { role: "assistant", content: res.reply, note: applied ? `✓ ${t("aiApplied")}` : undefined }]);
+      if (opts.speak && res.reply) speakMessage(next.length, res.reply);
     } catch (e) {
       setMessages([...next, { role: "assistant", content: `${t("aiError")}: ${(e as Error).message}`, error: true }]);
     } finally {
       setAiBusy(false);
     }
   };
+
+  // ---- perintah suara (diproses lokal; hanya pertanyaan yang ke Gemini) ----
+  const latest = <K extends Widget["kind"]>(kind: K) =>
+    [...board.widgets].reverse().find((w): w is Extract<Widget, { kind: K }> => w.kind === kind);
+
+  const handleVoice = (text: string) => {
+    const intent = interpretVoice(text);
+    const heard = `🎤 “${text}”`;
+    const solid = latest("solid");
+    const graph = latest("graph");
+    const needSolid = () => (solid ? true : (showToast(t("voiceNoSolid"), true), false));
+    const needGraph = () => (graph ? true : (showToast(t("voiceNoGraph"), true), false));
+    switch (intent.type) {
+      case "formula": {
+        try {
+          const parsed = parseFunction(intent.text);
+          if (graph)
+            updateWidget(graph.id, { functions: [...graph.functions, makeFunction(parsed, graph.functions.length)] } as Partial<Widget>, true);
+          else dispatch({ type: "addWidget", widget: makeGraph([parsed]) });
+          showToast(heard);
+        } catch {
+          // Belum terbaca: buka dialog agar guru bisa memperbaiki (tanpa memakai token AI).
+          setDialog({ kind: "formula", mode: graph ? "add" : "new", graphId: graph?.id, initial: intent.text });
+        }
+        return;
+      }
+      case "ask":
+        setAiOpen(true);
+        if (health?.ai.configured) sendToAi(intent.text, { speak: true });
+        else showToast(t("aiNotConfigured"), true);
+        return;
+      case "stop":
+        stopSpeaking();
+        setSpeakingIdx(null);
+        return;
+      case "undo":
+      case "redo":
+        dispatch({ type: intent.type });
+        break;
+      case "clear":
+        dispatch({ type: "clear" });
+        clearSelection();
+        showToast(t("voiceCleared"));
+        return;
+      case "tool":
+        setTool(intent.tool);
+        break;
+      case "solid":
+        createSolid(intent.solid);
+        break;
+      case "sphere": {
+        if (!needSolid()) return;
+        const opt = sphereOptions(solid!.solid);
+        if ((intent.kind === "in" && !opt.inner) || (intent.kind === "out" && !opt.outer)) {
+          showToast(t("voiceSphereUnavailable"), true);
+          return;
+        }
+        updateWidget(solid!.id, { sphere: intent.kind } as Partial<Widget>, true);
+        break;
+      }
+      case "resetPoints":
+        if (!needSolid()) return;
+        updateWidget(solid!.id, { picks: [] } as Partial<Widget>, true);
+        break;
+      case "rotate":
+        if (!needSolid()) return;
+        updateWidget(solid!.id, { rotation: rotateBy(solid!.rotation, intent.dx, intent.dy) } as Partial<Widget>, true);
+        break;
+      case "keyPoints":
+        if (!needGraph()) return;
+        updateWidget(graph!.id, { keyPoints: true } as Partial<Widget>, true);
+        break;
+      case "zoom":
+        if (!needGraph()) return;
+        updateWidget(graph!.id, { view: { ...graph!.view, ppu: graph!.view.ppu * intent.factor } } as Partial<Widget>, true);
+        break;
+    }
+    showToast(heard);
+  };
+
+  const voice = useSpeechRecognition(lang, handleVoice, (code) =>
+    showToast(code === "not-allowed" || code === "service-not-allowed" ? t("voiceDenied") : code === "network" ? t("voiceNetwork") : `${t("voiceError")} (${code})`, true),
+  );
 
   // ---- dialog rumus ----
   const onFormulaConfirm = (p: ParsedFunction) => {
@@ -321,6 +424,7 @@ export default function App() {
       } else if (!mod && e.key === "p") setTool("pen");
       else if (!mod && e.key === "e") setTool("eraser");
       else if (!mod && e.key === "l") setTool("lasso");
+      else if (!mod && e.key === "m") voice.toggle();
       else if ((e.key === "Delete" || e.key === "Backspace") && selected.length) {
         dispatch({ type: "removeStrokes", ids: selected });
         clearSelection();
@@ -328,7 +432,7 @@ export default function App() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [dialog, selected]);
+  }, [dialog, selected, voice.toggle]);
 
   const updateWidget = (id: string, patch: Partial<Widget>, record = false) => dispatch({ type: "updateWidget", id, patch, record });
   const common = (w: Widget, i: number) => ({
@@ -394,6 +498,7 @@ export default function App() {
         <div className="welcome">
           <h1>{t("welcomeTitle")}</h1>
           <p>{t("welcomeBody")}</p>
+          {voice.supported && <p>{t("welcomeVoice")}</p>}
         </div>
       )}
 
@@ -462,6 +567,14 @@ export default function App() {
         <hr />
         <ToolButton icon={<Sigma size={20} />} label={t("typeFormula")} onClick={() => setDialog({ kind: "formula", mode: "new", initial: "" })} />
         <ToolButton icon={<Box size={20} />} label={t("insertSolid")} onClick={() => setDialog({ kind: "solid", hint: false })} />
+        <ToolButton
+          icon={<Mic size={20} />}
+          label={voice.supported ? t("voice") : t("voiceUnsupported")}
+          active={voice.listening}
+          className={voice.listening ? "listening" : ""}
+          disabled={!voice.supported}
+          onClick={voice.toggle}
+        />
         <hr />
         <ToolButton icon={<Undo2 size={20} />} label={t("undo")} disabled={!hist.past.length} onClick={() => dispatch({ type: "undo" })} />
         <ToolButton icon={<Redo2 size={20} />} label={t("redo")} disabled={!hist.future.length} onClick={() => dispatch({ type: "redo" })} />
@@ -527,8 +640,11 @@ export default function App() {
           messages={messages}
           busy={aiBusy}
           configured={!!health?.ai.configured}
-          onSend={sendToAi}
+          onSend={(text) => sendToAi(text)}
           onClose={() => setAiOpen(false)}
+          mic={voice.supported ? { listening: voice.listening, onToggle: voice.toggle } : undefined}
+          speakingIdx={speakingIdx}
+          onSpeak={speakMessage}
         />
       )}
 
@@ -564,14 +680,22 @@ export default function App() {
         />
       )}
 
+      {voice.listening && (
+        <div className="voice-bubble">
+          <span className="voice-dot" />
+          {voice.interim || t("voiceListening")}
+        </div>
+      )}
       {toast && <div className={`toast ${toast.error ? "error" : ""}`}>{toast.text}</div>}
     </div>
   );
 }
 
-function ToolButton({ icon, label, active, disabled, onClick }: { icon: React.ReactNode; label: string; active?: boolean; disabled?: boolean; onClick: () => void }) {
+function ToolButton({
+  icon, label, active, disabled, className, onClick,
+}: { icon: React.ReactNode; label: string; active?: boolean; disabled?: boolean; className?: string; onClick: () => void }) {
   return (
-    <button className={`tool-btn ${active ? "active" : ""}`} title={label} aria-label={label} disabled={disabled} onClick={onClick}>
+    <button className={`tool-btn ${active ? "active" : ""} ${className ?? ""}`} title={label} aria-label={label} disabled={disabled} onClick={onClick}>
       {icon}
     </button>
   );

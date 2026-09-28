@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Loader2, Send, Sparkles, X } from "lucide-react";
+import { Loader2, Mic, Send, Sparkles, Volume2, VolumeX, X } from "lucide-react";
 import { useI18n } from "../i18n";
 import { RichText } from "./Tex";
 
@@ -16,9 +16,12 @@ interface Props {
   configured: boolean;
   onSend: (text: string) => void;
   onClose: () => void;
+  mic?: { listening: boolean; onToggle: () => void };
+  speakingIdx: number | null;
+  onSpeak: (index: number, text: string) => void;
 }
 
-export function AiPanel({ messages, busy, configured, onSend, onClose }: Props) {
+export function AiPanel({ messages, busy, configured, onSend, onClose, mic, speakingIdx, onSpeak }: Props) {
   const { t } = useI18n();
   const [text, setText] = useState("");
   const listRef = useRef<HTMLDivElement>(null);
@@ -59,6 +62,15 @@ export function AiPanel({ messages, busy, configured, onSend, onClose }: Props) 
           <div key={i} className={`ai-msg ${m.role} ${m.error ? "error" : ""}`}>
             <RichText text={m.content} />
             {m.note && <div className="ai-note">{m.note}</div>}
+            {m.role === "assistant" && !m.error && (
+              <button
+                className={`icon-btn sm speak-btn ${speakingIdx === i ? "active" : ""}`}
+                title={speakingIdx === i ? t("stopReading") : t("readAloud")}
+                onClick={() => onSpeak(i, m.content)}
+              >
+                {speakingIdx === i ? <VolumeX size={14} /> : <Volume2 size={14} />}
+              </button>
+            )}
           </div>
         ))}
         {busy && (
@@ -74,6 +86,16 @@ export function AiPanel({ messages, busy, configured, onSend, onClose }: Props) 
           send(text);
         }}
       >
+        {mic && (
+          <button
+            type="button"
+            className={`icon-btn ${mic.listening ? "listening" : ""}`}
+            title={t("voice")}
+            onClick={mic.onToggle}
+          >
+            <Mic size={16} />
+          </button>
+        )}
         <input value={text} disabled={!configured} placeholder={t("aiPlaceholder")} onChange={(e) => setText(e.target.value)} />
         <button className="icon-btn primary" disabled={!configured || busy || !text.trim()} title={t("aiSend")}>
           <Send size={16} />
