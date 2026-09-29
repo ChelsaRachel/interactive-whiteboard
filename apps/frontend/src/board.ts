@@ -6,7 +6,8 @@ import type { SolidType } from "./geometry/solids";
 
 export interface FunctionDef {
   id: string;
-  latex: string; // LaTeX asli (sudah dirapikan), tanpa "y ="
+  latex: string; // fungsi: ruas kanan; implisit/polar: persamaan lengkap
+  kind?: "explicit" | "implicit" | "polar"; // undefined = explicit untuk kompatibilitas state lama
   params: Record<string, number>;
   color: string;
   visible: boolean;

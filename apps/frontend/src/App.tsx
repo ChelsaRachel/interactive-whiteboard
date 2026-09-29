@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import {
-  Box, ChartSpline, Eraser, Languages, Lasso, Loader2, Mic, Pen, Redo2, Settings, Sigma, Sparkles, Trash2, Undo2, X,
+  Box, ChartSpline, Eraser, Languages, Lasso, Loader2, LogOut, Mic, Pen, Redo2, Settings, ShieldCheck, Sigma, Sparkles, Trash2, Undo2, UserRound, X,
 } from "lucide-react";
 import {
   FUNCTION_COLORS, emptyBoard, historyReducer, uid,
@@ -14,8 +14,9 @@ import { SectionWidgetView } from "./widgets/SectionWidgetView";
 import { initialRotation, rotateBy } from "./widgets/solidScene";
 import { FormulaDialog, RecognizeDialog, SolidChooser, type RecognizedItem } from "./components/Dialogs";
 import { AiPanel, type ChatMessage } from "./components/AiPanel";
-import { api, type AiAction, type Health } from "./api";
-import { parseFunction, substituteTex, type ParsedFunction } from "./math/latex";
+import { UserManagement } from "./components/UserManagement";
+import { api, type AiAction, type AuthUser, type ChatSessionSummary, type Health } from "./api";
+import { parseGraphExpression, substituteTex, type ParsedGraphExpression } from "./math/latex";
 import { guessSolidFromSketch } from "./geometry/sketch";
 import { buildSolid, sphereOptions, type SolidType } from "./geometry/solids";
 import { interpretVoice } from "./voice/commands";
@@ -64,13 +65,13 @@ function placeCenter(w: number, h: number) {
   return clampRect(window.innerWidth / 2 - w / 2, window.innerHeight / 2 - h / 2, w, h);
 }
 
-function makeFunction(p: ParsedFunction, index: number, prev?: FunctionDef): FunctionDef {
+function makeFunction(p: ParsedGraphExpression, index: number, prev?: FunctionDef): FunctionDef {
   const params: Record<string, number> = {};
   for (const name of p.params) params[name] = prev?.params[name] ?? 1;
-  return { id: prev?.id ?? uid("f"), latex: p.tex, params, color: prev?.color ?? FUNCTION_COLORS[index % FUNCTION_COLORS.length], visible: true };
+  return { id: prev?.id ?? uid("f"), kind: p.kind, latex: p.tex, params, color: prev?.color ?? FUNCTION_COLORS[index % FUNCTION_COLORS.length], visible: true };
 }
 
-function makeGraph(parsed: ParsedFunction[], at?: BBox): GraphWidget {
+function makeGraph(parsed: ParsedGraphExpression[], at?: BBox): GraphWidget {
   const w = 520, h = 470 + Math.min(parsed.reduce((n, p) => n + p.params.length, 0), 4) * 28;
   const pos = at ? placeBeside(at, w, h) : placeCenter(w, h);
   return {
@@ -81,7 +82,7 @@ function makeGraph(parsed: ParsedFunction[], at?: BBox): GraphWidget {
   };
 }
 
-export default function App() {
+export default function App({ user, onLogout }: { user: AuthUser; onLogout: () => void }) {
   const { t, lang, setLang } = useI18n();
   const [hist, dispatch] = useReducer(historyReducer, { past: [], present: emptyBoard, future: [] });
   const board = hist.present;
@@ -99,7 +100,11 @@ export default function App() {
   const [aiOpen, setAiOpen] = useState(false);
   const [aiBusy, setAiBusy] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [chatSessionId, setChatSessionId] = useState<string | null>(null);
+  const [chatSessions, setChatSessions] = useState<ChatSessionSummary[]>([]);
+  const [chatHistoryBusy, setChatHistoryBusy] = useState(false);
   const [speakingIdx, setSpeakingIdx] = useState<number | null>(null);
+  const [userAdminOpen, setUserAdminOpen] = useState(false);
   const toastTimer = useRef<number>(0);
 
   const showToast = useCallback((text: string, error = false) => {
@@ -197,12 +202,28 @@ export default function App() {
         graph_id: g.id,
         functions: g.functions.map((f) => {
           let withValues = "";
+          let expressionKind: FunctionDef["kind"] = f.kind ?? "explicit";
+          let expressionLatex = expressionKind === "explicit" ? `y=${f.latex}` : f.latex;
           try {
-            withValues = `y=${substituteTex(parseFunction(f.latex).ast, f.params)}`;
+            const parsed = parseGraphExpression(f.latex);
+            expressionKind = parsed.kind;
+            expressionLatex = parsed.kind === "explicit" ? `y=${f.latex}` : f.latex;
+            withValues = parsed.kind === "implicit"
+              ? `${substituteTex(parsed.ast, f.params)}=0`
+              : parsed.kind === "polar"
+                ? `r=${substituteTex(parsed.ast, f.params)}`
+                : `y=${substituteTex(parsed.ast, f.params)}`;
           } catch {
             /* rumus tidak valid */
           }
-          return { function_id: f.id, latex: `y=${f.latex}`, params: f.params, with_values: withValues, visible: f.visible };
+          return {
+            function_id: f.id,
+            kind: expressionKind,
+            latex: expressionLatex,
+            params: f.params,
+            with_values: withValues,
+            visible: f.visible,
+          };
         }),
       })),
     solids: board.widgets
@@ -241,7 +262,7 @@ export default function App() {
     for (const a of acts) {
       try {
         if (a.type === "add_function" && a.latex) {
-          const parsed = parseFunction(a.latex);
+          const parsed = parseGraphExpression(a.latex);
           const g = a.graph_id === "new" ? undefined : pickGraph(a.graph_id);
           if (g) g.functions.push(makeFunction(parsed, g.functions.length));
           else if (created) created.functions.push(makeFunction(parsed, created.functions.length));
@@ -251,7 +272,7 @@ export default function App() {
         }
         const g = pickGraph(a.graph_id);
         if (!g) continue;
-        // Gemini kadang tidak menyertakan function_id/param; tebak bila tidak ambigu.
+        // Model kadang tidak menyertakan function_id/param; tebak bila tidak ambigu.
         let idx = g.functions.findIndex((f) => f.id === a.function_id);
         if (idx < 0 && a.param) idx = g.functions.findIndex((f) => a.param! in f.params);
         if (idx < 0 && g.functions.length === 1) idx = 0;
@@ -263,7 +284,7 @@ export default function App() {
           g.functions[idx] = { ...f, params: { ...f.params, [param]: a.value } };
           count++;
         } else if (a.type === "update_function" && a.latex) {
-          g.functions[idx] = makeFunction(parseFunction(a.latex), idx, f);
+          g.functions[idx] = makeFunction(parseGraphExpression(a.latex), idx, f);
           count++;
         } else if (a.type === "remove_function") {
           g.functions.splice(idx, 1);
@@ -289,18 +310,71 @@ export default function App() {
     speak(text, lang, () => setSpeakingIdx((cur) => (cur === i ? null : cur)));
   };
 
+  const refreshChatSessions = useCallback(async () => {
+    setChatHistoryBusy(true);
+    try {
+      const result = await api.chatSessions();
+      setChatSessions(result.sessions);
+    } catch {
+      // Riwayat bukan penghalang untuk memakai chat aktif.
+    } finally {
+      setChatHistoryBusy(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (aiOpen) void refreshChatSessions();
+  }, [aiOpen, refreshChatSessions]);
+
+  const newChatSession = () => {
+    stopSpeaking();
+    setSpeakingIdx(null);
+    setChatSessionId(null);
+    setMessages([]);
+  };
+
+  const openChatSession = async (sessionId: string) => {
+    if (aiBusy || sessionId === chatSessionId) return;
+    setChatHistoryBusy(true);
+    try {
+      const { session } = await api.chatSession(sessionId);
+      stopSpeaking();
+      setSpeakingIdx(null);
+      setChatSessionId(session.id);
+      setMessages(session.messages);
+    } catch (e) {
+      showToast(`${t("aiHistoryError")}: ${(e as Error).message}`, true);
+    } finally {
+      setChatHistoryBusy(false);
+    }
+  };
+
+  const deleteChatSession = async (sessionId: string) => {
+    if (!window.confirm(t("aiDeleteConfirm"))) return;
+    setChatHistoryBusy(true);
+    try {
+      await api.deleteChatSession(sessionId);
+      if (sessionId === chatSessionId) newChatSession();
+      await refreshChatSessions();
+    } catch (e) {
+      showToast(`${t("aiHistoryError")}: ${(e as Error).message}`, true);
+    } finally {
+      setChatHistoryBusy(false);
+    }
+  };
+
   const sendToAi = async (text: string, opts: { speak?: boolean } = {}) => {
     const next: ChatMessage[] = [...messages, { role: "user", content: text }];
     setMessages(next);
     setAiBusy(true);
     try {
-      const res = await api.chat(
-        next.filter((m) => !m.error).map((m) => ({ role: m.role, content: m.content })),
-        boardContext(),
-        lang,
-      );
+      const res = await api.chat(chatSessionId, text, boardContext(), lang);
+      setChatSessionId(res.session_id);
       const applied = applyAiActions(res.actions ?? []);
-      setMessages([...next, { role: "assistant", content: res.reply, note: applied ? `✓ ${t("aiApplied")}` : undefined }]);
+      const requested = res.actions?.length ?? 0;
+      const note = applied ? `✓ ${t("aiApplied")}` : requested ? `⚠ ${t("aiNotApplied")}` : undefined;
+      setMessages([...next, { role: "assistant", content: res.reply, note }]);
+      void refreshChatSessions();
       if (opts.speak && res.reply) speakMessage(next.length, res.reply);
     } catch (e) {
       setMessages([...next, { role: "assistant", content: `${t("aiError")}: ${(e as Error).message}`, error: true }]);
@@ -309,7 +383,7 @@ export default function App() {
     }
   };
 
-  // ---- perintah suara (diproses lokal; hanya pertanyaan yang ke Gemini) ----
+  // ---- perintah suara (diproses lokal; hanya pertanyaan yang ke OpenAI) ----
   const latest = <K extends Widget["kind"]>(kind: K) =>
     [...board.widgets].reverse().find((w): w is Extract<Widget, { kind: K }> => w.kind === kind);
 
@@ -323,7 +397,7 @@ export default function App() {
     switch (intent.type) {
       case "formula": {
         try {
-          const parsed = parseFunction(intent.text);
+          const parsed = parseGraphExpression(intent.text);
           if (graph)
             updateWidget(graph.id, { functions: [...graph.functions, makeFunction(parsed, graph.functions.length)] } as Partial<Widget>, true);
           else dispatch({ type: "addWidget", widget: makeGraph([parsed]) });
@@ -393,7 +467,7 @@ export default function App() {
   );
 
   // ---- dialog rumus ----
-  const onFormulaConfirm = (p: ParsedFunction) => {
+  const onFormulaConfirm = (p: ParsedGraphExpression) => {
     if (dialog?.kind !== "formula") return;
     if (dialog.mode === "new") dispatch({ type: "addWidget", widget: makeGraph([p]) });
     else {
@@ -630,6 +704,16 @@ export default function App() {
             </div>
           )}
         </div>
+        {user.role === "superadmin" && (
+          <button className="icon-btn lg" title={lang === "id" ? "Kelola pengguna" : "Manage users"} onClick={() => setUserAdminOpen(true)}>
+            <ShieldCheck size={18} />
+          </button>
+        )}
+        <div className="account-pill">
+          <UserRound size={16} />
+          <span>{user.username}</span>
+          <button title={lang === "id" ? "Keluar" : "Sign out"} onClick={onLogout}><LogOut size={15} /></button>
+        </div>
         <button className={`btn ai-btn ${aiOpen ? "active" : ""}`} onClick={() => setAiOpen((v) => !v)}>
           <Sparkles size={16} /> {t("ai")}
         </button>
@@ -639,14 +723,22 @@ export default function App() {
         <AiPanel
           messages={messages}
           busy={aiBusy}
+          sessions={chatSessions}
+          currentSessionId={chatSessionId}
+          historyBusy={chatHistoryBusy}
           configured={!!health?.ai.configured}
           onSend={(text) => sendToAi(text)}
+          onNewSession={newChatSession}
+          onSelectSession={(id) => void openChatSession(id)}
+          onDeleteSession={(id) => void deleteChatSession(id)}
           onClose={() => setAiOpen(false)}
           mic={voice.supported ? { listening: voice.listening, onToggle: voice.toggle } : undefined}
           speakingIdx={speakingIdx}
           onSpeak={speakMessage}
         />
       )}
+
+      {userAdminOpen && <UserManagement onClose={() => setUserAdminOpen(false)} />}
 
       {dialog?.kind === "recognized" && (
         <RecognizeDialog

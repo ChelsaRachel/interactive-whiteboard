@@ -92,9 +92,15 @@ function tokenize(src: string): Tok[] {
         toks.push({ t: "const", v: "pi" });
         j += 2;
       } else {
-        const c = rest[0];
-        toks.push(c === "e" ? { t: "const", v: "e" } : { t: "id", v: c });
-        j += 1;
+        const greek = GREEK.find((name) => rest.startsWith(name));
+        if (greek) {
+          toks.push({ t: "id", v: greek });
+          j += greek.length;
+        } else {
+          const c = rest[0];
+          toks.push(c === "e" ? { t: "const", v: "e" } : { t: "id", v: c });
+          j += 1;
+        }
       }
     }
     letters = "";
@@ -389,9 +395,34 @@ function dependentVar(toks: Tok[]): string | null {
 }
 
 export interface ParsedFunction {
+  kind: "explicit";
   ast: Node;
   params: string[];
   tex: string; // LaTeX yang sudah dirapikan, tanpa "y ="
+}
+
+export interface ParsedImplicit {
+  kind: "implicit";
+  ast: Node; // ruas kiri - ruas kanan; kurva berada pada ast = 0
+  params: string[];
+  tex: string; // persamaan lengkap
+}
+
+export interface ParsedPolar {
+  kind: "polar";
+  ast: Node; // r sebagai fungsi sudut theta
+  params: string[];
+  tex: string; // persamaan lengkap r=...
+}
+
+export type ParsedGraphExpression = ParsedFunction | ParsedImplicit | ParsedPolar;
+
+function parseTokens(toks: Tok[]): Node {
+  if (!toks.length) throw new ParseError("empty");
+  const parser = new Parser(toks);
+  const ast = parser.parseExpr();
+  if (!parser.done()) throw new ParseError("trailing", JSON.stringify(toks[parser.i]));
+  return ast;
 }
 
 export function parseFunction(src: string): ParsedFunction {
@@ -405,14 +436,42 @@ export function parseFunction(src: string): ParsedFunction {
   else if (parts.length === 2 && dependentVar(parts[1])) [dep, rhs] = [dependentVar(parts[1])!, parts[0]];
   else throw new ParseError("not_function");
   if (!rhs.length) throw new ParseError("empty");
-  const p = new Parser(rhs);
-  const ast = p.parseExpr();
-  if (!p.done()) throw new ParseError("trailing", JSON.stringify(rhs[p.i]));
+  const ast = parseTokens(rhs);
   const vars = new Set<string>();
   collectVars(ast, vars);
   if (vars.has("y") || vars.has(dep)) throw new ParseError("y_on_rhs");
   vars.delete("x");
-  return { ast, params: [...vars].sort(), tex: toTex(ast) };
+  return { kind: "explicit", ast, params: [...vars].sort(), tex: toTex(ast) };
+}
+
+/** Parse fungsi eksplisit y=f(x) maupun persamaan implisit F(x,y)=G(x,y). */
+export function parseGraphExpression(src: string): ParsedGraphExpression {
+  const toks = tokenize(src);
+  if (!toks.length) throw new ParseError("empty");
+  const parts = splitTopLevelEquals(toks);
+  if (parts.length === 2) {
+    const leftIsR = parts[0].length === 1 && parts[0][0].t === "id" && parts[0][0].v === "r";
+    const rightIsR = parts[1].length === 1 && parts[1][0].t === "id" && parts[1][0].v === "r";
+    if (leftIsR || rightIsR) {
+      const ast = parseTokens(leftIsR ? parts[1] : parts[0]);
+      const vars = new Set<string>();
+      collectVars(ast, vars);
+      vars.delete("theta");
+      vars.delete("t");
+      return { kind: "polar", ast, params: [...vars].sort(), tex: `r=${toTex(ast)}` };
+    }
+  }
+  if (parts.length === 2 && !dependentVar(parts[0]) && !dependentVar(parts[1])) {
+    const left = parseTokens(parts[0]);
+    const right = parseTokens(parts[1]);
+    const ast: Node = { type: "bin", op: "-", a: left, b: right };
+    const vars = new Set<string>();
+    collectVars(ast, vars);
+    vars.delete("x");
+    vars.delete("y");
+    return { kind: "implicit", ast, params: [...vars].sort(), tex: `${toTex(left)}=${toTex(right)}` };
+  }
+  return parseFunction(src);
 }
 
 function collectVars(n: Node, out: Set<string>) {
@@ -444,6 +503,8 @@ const FN_IMPL: Record<string, (v: number) => number> = {
 };
 
 export type CompiledFn = (x: number, params: Record<string, number>) => number;
+export type CompiledImplicit = (x: number, y: number, params: Record<string, number>) => number;
+export type CompiledPolar = (theta: number, params: Record<string, number>) => number;
 
 export function compile(n: Node): CompiledFn {
   switch (n.type) {
@@ -486,6 +547,74 @@ export function compile(n: Node): CompiledFn {
         case "*": return (x, p) => a(x, p) * b(x, p);
         case "/": return (x, p) => a(x, p) / b(x, p);
         case "^": return (x, p) => signedPow(a(x, p), b(x, p));
+      }
+    }
+  }
+}
+
+function polarNode(n: Node): Node {
+  switch (n.type) {
+    case "var":
+      return n.name === "theta" || n.name === "t" ? { type: "var", name: "x" } : n;
+    case "bin":
+      return { ...n, a: polarNode(n.a), b: polarNode(n.b) };
+    case "neg":
+    case "abs":
+      return { ...n, a: polarNode(n.a) };
+    case "call":
+      return { ...n, arg: polarNode(n.arg), base: n.base ? polarNode(n.base) : undefined };
+    default:
+      return n;
+  }
+}
+
+export function compilePolar(n: Node): CompiledPolar {
+  return compile(polarNode(n));
+}
+
+/** Kompilasi AST dua variabel untuk kurva implisit F(x,y)=0. */
+export function compileImplicit(n: Node): CompiledImplicit {
+  switch (n.type) {
+    case "num": {
+      const value = n.v;
+      return () => value;
+    }
+    case "const": {
+      const value = n.name === "pi" ? Math.PI : Math.E;
+      return () => value;
+    }
+    case "var": {
+      const name = n.name;
+      if (name === "x") return (x) => x;
+      if (name === "y") return (_x, y) => y;
+      return (_x, _y, params) => params[name] ?? 1;
+    }
+    case "neg": {
+      const value = compileImplicit(n.a);
+      return (x, y, params) => -value(x, y, params);
+    }
+    case "abs": {
+      const value = compileImplicit(n.a);
+      return (x, y, params) => Math.abs(value(x, y, params));
+    }
+    case "call": {
+      const argument = compileImplicit(n.arg);
+      if (n.fn === "log" && n.base) {
+        const base = compileImplicit(n.base);
+        return (x, y, params) => Math.log(argument(x, y, params)) / Math.log(base(x, y, params));
+      }
+      const fn = FN_IMPL[n.fn];
+      return (x, y, params) => fn(argument(x, y, params));
+    }
+    case "bin": {
+      const left = compileImplicit(n.a);
+      const right = compileImplicit(n.b);
+      switch (n.op) {
+        case "+": return (x, y, params) => left(x, y, params) + right(x, y, params);
+        case "-": return (x, y, params) => left(x, y, params) - right(x, y, params);
+        case "*": return (x, y, params) => left(x, y, params) * right(x, y, params);
+        case "/": return (x, y, params) => left(x, y, params) / right(x, y, params);
+        case "^": return (x, y, params) => signedPow(left(x, y, params), right(x, y, params));
       }
     }
   }

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Box, Check, Cuboid, Pyramid, Triangle } from "lucide-react";
-import { ParseError, parseFunction, type ParsedFunction } from "../math/latex";
+import { ParseError, parseGraphExpression, type ParsedGraphExpression } from "../math/latex";
 import { formatNumber, useI18n, type TKey } from "../i18n";
 import { SOLID_TYPES, type SolidType } from "../geometry/solids";
 import { Tex } from "./Tex";
@@ -22,12 +22,12 @@ function Modal({ title, children, footer, onClose }: { title: string; children: 
   );
 }
 
-export function useFormula(src: string): { parsed?: ParsedFunction; error?: string } {
+export function useFormula(src: string): { parsed?: ParsedGraphExpression; error?: string } {
   const { t } = useI18n();
   return useMemo(() => {
     if (!src.trim()) return { error: t("err_empty") };
     try {
-      return { parsed: parseFunction(src) };
+      return { parsed: parseGraphExpression(src) };
     } catch (e) {
       if (e instanceof ParseError) {
         const key = `err_${e.code}` as TKey;
@@ -50,7 +50,7 @@ function FormulaField({ value, onChange, autoFocus }: { value: string; onChange:
     <div className="formula-field">
       <input ref={ref} value={value} placeholder={t("formulaPlaceholder")} spellCheck={false} onChange={(e) => onChange(e.target.value)} />
       <div className={`formula-preview ${error ? "error" : ""}`}>
-        {parsed ? <Tex tex={`y = ${parsed.tex}`} display /> : <span>{error}</span>}
+        {parsed ? <Tex tex={parsed.kind === "explicit" ? `y = ${parsed.tex}` : parsed.tex} display /> : <span>{error}</span>}
       </div>
     </div>
   );
@@ -62,7 +62,7 @@ export function FormulaDialog({
   title: string;
   initial: string;
   confirmLabel: string;
-  onConfirm: (p: ParsedFunction) => void;
+  onConfirm: (p: ParsedGraphExpression) => void;
   onCancel: () => void;
 }) {
   const { t } = useI18n();
@@ -101,7 +101,7 @@ export function RecognizeDialog({
   items, onConfirm, onCancel,
 }: {
   items: RecognizedItem[];
-  onConfirm: (parsed: ParsedFunction[]) => void;
+  onConfirm: (parsed: ParsedGraphExpression[]) => void;
   onCancel: () => void;
 }) {
   const { t, lang } = useI18n();
@@ -109,12 +109,12 @@ export function RecognizeDialog({
   const [include, setInclude] = useState(items.map(() => true));
   const parsedList = values.map((v) => {
     try {
-      return parseFunction(v);
+      return parseGraphExpression(v);
     } catch {
       return null;
     }
   });
-  const chosen = parsedList.filter((p, i) => p && include[i]) as ParsedFunction[];
+  const chosen = parsedList.filter((p, i) => p && include[i]) as ParsedGraphExpression[];
   return (
     <Modal
       title={t("recognizedTitle")}

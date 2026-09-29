@@ -1,7 +1,46 @@
+# -----------------------------------------------------------------------------
+# Private data, credentials, and local configuration
+# -----------------------------------------------------------------------------
+**/.env
+**/.env.*
+!**/.env.example
+
+# File-based authentication and AI conversation data contain usernames,
+# password hashes, session content, and other user data.
+**/auth_config.json
+**/auth_config.json.*
+**/chat_history.json
+**/chat_history.json.*
+
+# Common credential/key files. Keep sanitized `*.example.json` templates public.
+**/credentials*.json
+**/service-account*.json
+**/secrets*.json
+!**/*.example.json
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Local databases and runtime logs may contain private user data.
+apps/backend/*.db
+apps/backend/*.sqlite
+apps/backend/*.sqlite3
+*.log
+
+# -----------------------------------------------------------------------------
+# Dependencies, virtual environments, caches, and build output
+# -----------------------------------------------------------------------------
 node_modules/
-frontend/dist/
-backend/.venv/
-backend/.env
-models/
-docs
+apps/frontend/dist/
+apps/backend/.venv/
 __pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Local model weights and project-only reference artifacts
+models/
+design/
+docs/

@@ -1,7 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ChartSpline, Eye, EyeOff, Maximize2, Pencil, Plus, Target, Trash2, ZoomIn, ZoomOut } from "lucide-react";
 import type { FunctionDef, GraphWidget, Widget } from "../board";
-import { compile, parseFunction, type CompiledFn } from "../math/latex";
+import {
+  compile, compileImplicit, compilePolar, parseGraphExpression,
+  type CompiledFn, type CompiledImplicit, type CompiledPolar,
+} from "../math/latex";
 import { findKeyPoints, type KeyPoint } from "../math/analysis";
 import { formatNumber, useI18n, type Lang } from "../i18n";
 import { Tex } from "../components/Tex";
@@ -20,6 +23,11 @@ interface Props {
 
 export const DEFAULT_VIEW = { cx: 0, cy: 0, ppu: 36 };
 
+type CompiledGraph =
+  | { kind: "explicit"; evaluate: CompiledFn }
+  | { kind: "implicit"; evaluate: CompiledImplicit }
+  | { kind: "polar"; evaluate: CompiledPolar };
+
 export function GraphWidgetView({ widget, z, onFocus, onCheckpoint, onChange, onClose, onEditFunction, onAddFunction }: Props) {
   const { t, lang } = useI18n();
   const plotRef = useRef<HTMLDivElement>(null);
@@ -27,10 +35,17 @@ export function GraphWidgetView({ widget, z, onFocus, onCheckpoint, onChange, on
   const [size, setSize] = useState({ w: 300, h: 200 });
 
   const compiled = useMemo(() => {
-    const m = new Map<string, CompiledFn | null>();
+    const m = new Map<string, CompiledGraph | null>();
     for (const f of widget.functions) {
       try {
-        m.set(f.id, compile(parseFunction(f.latex).ast));
+        const parsed = parseGraphExpression(f.latex);
+        m.set(f.id,
+          parsed.kind === "implicit"
+            ? { kind: "implicit", evaluate: compileImplicit(parsed.ast) }
+            : parsed.kind === "polar"
+              ? { kind: "polar", evaluate: compilePolar(parsed.ast) }
+              : { kind: "explicit", evaluate: compile(parsed.ast) },
+        );
       } catch {
         m.set(f.id, null);
       }
@@ -165,7 +180,7 @@ export function GraphWidgetView({ widget, z, onFocus, onCheckpoint, onChange, on
             <div key={f.id} className={`fn-row ${compiled.get(f.id) ? "" : "invalid"}`}>
               <div className="fn-head">
                 <span className="fn-dot" style={{ background: f.color }} />
-                <Tex tex={`y = ${f.latex}`} className="fn-tex" />
+                <Tex tex={f.kind && f.kind !== "explicit" ? f.latex : `y = ${f.latex}`} className="fn-tex" />
                 <span className="fn-actions">
                   <button className="icon-btn sm" title={f.visible ? t("hide") : t("show")} onClick={() => updateFn(f.id, { visible: !f.visible }, true)}>
                     {f.visible ? <Eye size={14} /> : <EyeOff size={14} />}
@@ -221,7 +236,7 @@ function drawPlot(
   W: number,
   H: number,
   view: GraphWidget["view"],
-  fns: { f: CompiledFn; def: FunctionDef }[],
+  fns: { f: CompiledGraph; def: FunctionDef }[],
   showKeyPoints: boolean,
   lang: Lang,
 ) {
@@ -297,12 +312,20 @@ function drawPlot(
     ctx.strokeStyle = def.color;
     ctx.lineWidth = 2.6;
     ctx.lineJoin = "round";
+    if (f.kind === "implicit") {
+      drawImplicit(ctx, f.evaluate, def.params, xmin, xmax, ymin, ymax, W, H);
+      continue;
+    }
+    if (f.kind === "polar") {
+      drawPolar(ctx, f.evaluate, def.params, X, Y, W);
+      continue;
+    }
     ctx.beginPath();
     let pen = false;
     let prevY = 0;
     for (let i = 0; i <= samples; i++) {
       const x = xmin + ((xmax - xmin) * i) / samples;
-      const y = f(x, def.params);
+      const y = f.evaluate(x, def.params);
       if (!Number.isFinite(y)) {
         pen = false;
         continue;
@@ -320,7 +343,8 @@ function drawPlot(
   if (!showKeyPoints) return;
   ctx.font = "12px Inter, system-ui, sans-serif";
   for (const { f, def } of fns) {
-    const pts: KeyPoint[] = findKeyPoints((x) => f(x, def.params), xmin, xmax);
+    if (f.kind !== "explicit") continue;
+    const pts: KeyPoint[] = findKeyPoints((x) => f.evaluate(x, def.params), xmin, xmax);
     for (const p of pts) {
       if (p.y < ymin || p.y > ymax) continue;
       const px = X(p.x), py = Y(p.y);
@@ -343,4 +367,105 @@ function drawPlot(
       ctx.textBaseline = "alphabetic";
     }
   }
+}
+
+function drawPolar(
+  ctx: CanvasRenderingContext2D,
+  fn: CompiledPolar,
+  params: Record<string, number>,
+  X: (x: number) => number,
+  Y: (y: number) => number,
+  width: number,
+) {
+  const samples = Math.max(900, Math.ceil(width * 3));
+  ctx.beginPath();
+  let pen = false;
+  let previousX = 0;
+  let previousY = 0;
+  for (let i = 0; i <= samples; i++) {
+    const theta = (Math.PI * 2 * i) / samples;
+    const radius = fn(theta, params);
+    if (!Number.isFinite(radius)) {
+      pen = false;
+      continue;
+    }
+    const px = X(radius * Math.cos(theta));
+    const py = Y(radius * Math.sin(theta));
+    if (pen && Math.hypot(px - previousX, py - previousY) > width) pen = false;
+    if (pen) ctx.lineTo(px, py);
+    else ctx.moveTo(px, py);
+    pen = true;
+    previousX = px;
+    previousY = py;
+  }
+  ctx.closePath();
+  ctx.stroke();
+}
+
+function drawImplicit(
+  ctx: CanvasRenderingContext2D,
+  fn: CompiledImplicit,
+  params: Record<string, number>,
+  xmin: number,
+  xmax: number,
+  ymin: number,
+  ymax: number,
+  W: number,
+  H: number,
+) {
+  const cellPx = 5;
+  const cols = Math.max(20, Math.ceil(W / cellPx));
+  const rows = Math.max(20, Math.ceil(H / cellPx));
+  const values = Array.from({ length: rows + 1 }, () => new Float64Array(cols + 1));
+  for (let row = 0; row <= rows; row++) {
+    const y = ymax - ((ymax - ymin) * row) / rows;
+    for (let col = 0; col <= cols; col++) {
+      const x = xmin + ((xmax - xmin) * col) / cols;
+      values[row][col] = fn(x, y, params);
+    }
+  }
+
+  const point = (edge: number, col: number, row: number, corners: number[]) => {
+    const x0 = (W * col) / cols, x1 = (W * (col + 1)) / cols;
+    const y0 = (H * row) / rows, y1 = (H * (row + 1)) / rows;
+    const interpolate = (a: number, b: number) => {
+      const denominator = a - b;
+      return Math.max(0, Math.min(1, denominator === 0 ? 0.5 : a / denominator));
+    };
+    if (edge === 0) return [x0 + (x1 - x0) * interpolate(corners[0], corners[1]), y0] as const;
+    if (edge === 1) return [x1, y0 + (y1 - y0) * interpolate(corners[1], corners[2])] as const;
+    if (edge === 2) return [x0 + (x1 - x0) * interpolate(corners[3], corners[2]), y1] as const;
+    return [x0, y0 + (y1 - y0) * interpolate(corners[0], corners[3])] as const;
+  };
+
+  ctx.beginPath();
+  for (let row = 0; row < rows; row++) {
+    for (let col = 0; col < cols; col++) {
+      const corners = [values[row][col], values[row][col + 1], values[row + 1][col + 1], values[row + 1][col]];
+      if (corners.some((value) => !Number.isFinite(value))) continue;
+      const edges: number[] = [];
+      if ((corners[0] <= 0) !== (corners[1] <= 0)) edges.push(0);
+      if ((corners[1] <= 0) !== (corners[2] <= 0)) edges.push(1);
+      if ((corners[3] <= 0) !== (corners[2] <= 0)) edges.push(2);
+      if ((corners[0] <= 0) !== (corners[3] <= 0)) edges.push(3);
+      if (edges.length === 2) {
+        const a = point(edges[0], col, row, corners), b = point(edges[1], col, row, corners);
+        ctx.moveTo(a[0], a[1]);
+        ctx.lineTo(b[0], b[1]);
+      } else if (edges.length === 4) {
+        const centerX = xmin + ((xmax - xmin) * (col + 0.5)) / cols;
+        const centerY = ymax - ((ymax - ymin) * (row + 0.5)) / rows;
+        const centerPositive = fn(centerX, centerY, params) > 0;
+        const pairs = centerPositive === (corners[0] > 0)
+          ? [[0, 3], [1, 2]]
+          : [[0, 1], [2, 3]];
+        for (const [first, second] of pairs) {
+          const a = point(first, col, row, corners), b = point(second, col, row, corners);
+          ctx.moveTo(a[0], a[1]);
+          ctx.lineTo(b[0], b[1]);
+        }
+      }
+    }
+  }
+  ctx.stroke();
 }
