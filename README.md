@@ -5,6 +5,11 @@ Riset internal: papan tulis digital untuk matematika SMA, meniru demo di `docs/l
 - **Tulis rumus → grafik.** Mendukung fungsi eksplisit seperti `y = x² − 3`, kurva implisit seperti `x² + y² = 4`, serta persamaan polar seperti `r = 1 + 0.4 cos(5 theta)`. Huruf parameter otomatis menjadi slider. Titik penting fungsi eksplisit bisa ditampilkan.
 - **Sketsa → bangun ruang 3D.** Gambar kubus/balok/limas, laso, pilih **Jadikan bangun ruang**. Bangun bisa diputar, rusuk tersembunyi putus-putus, titik diberi label gaya buku (ABCD.EFGH).
 - **Irisan bidang.** Mode **Titik irisan**: ketuk 3 titik pada rusuk (menempel ke ujung/tengah/sepertiga rusuk). Irisan muncul di bangun dan sebagai bangun datar sebenarnya lengkap dengan sudut, panjang sisi, luas, keliling, dan nama bangunnya.
+- **Bangun ruang lengkung: kerucut, tabung, bola.** Bisa diputar seperti bangun lainnya.
+- **Volume dan luas permukaan** untuk semua bangun, langsung tampil dan berubah saat ukuran diubah.
+- **Slider ukuran** (rusuk, jari-jari, tinggi, panjang/lebar) untuk mengubah bangun secara langsung.
+- **Irisan bidang untuk bangun lengkung.** Bola → lingkaran. Tabung → lingkaran, persegi panjang, atau elips (miring). Kerucut → seluruh irisan kerucut: lingkaran, elips, parabola, hiperbola, dan segitiga (lewat puncak). Widget irisan menampilkan bentuk sebenarnya lengkap dengan luas, keliling, dan jari-jari/sumbu.
+- **Jaring-jaring (net)** dengan slider untuk membentangkan sisi bangun polihedron dari 3D ke 2D.
 - **Bola dalam / bola luar** untuk kubus (dan bola luar untuk balok).
 - **Asisten AI** (OpenAI) yang membaca isi papan, menjelaskan, dan langsung mengubah grafik, termasuk kurva tertutup/implisit.
 - **Memory dan riwayat chat per pengguna.** Percakapan disimpan lokal tanpa database di `apps/backend/chat_history.json`, bisa dibuka kembali, dilanjutkan, atau dihapus dari panel Asisten AI.

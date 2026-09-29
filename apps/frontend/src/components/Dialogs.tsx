@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { Box, Check, Cuboid, Pyramid, Triangle } from "lucide-react";
+import { Box, Check, Circle, CircleDot, Cuboid, Cylinder, Pyramid, Triangle } from "lucide-react";
 import { ParseError, parseGraphExpression, type ParsedGraphExpression } from "../math/latex";
 import { formatNumber, useI18n, type TKey } from "../i18n";
 import { SOLID_TYPES, type SolidType } from "../geometry/solids";
@@ -153,6 +153,9 @@ const SOLID_ICONS: Record<SolidType, ReactNode> = {
   squarePyramid: <Pyramid size={28} />,
   triPyramid: <Triangle size={28} />,
   triPrism: <Cuboid size={28} style={{ transform: "skewX(-12deg)" }} />,
+  cylinder: <Cylinder size={28} />,
+  cone: <CircleDot size={28} />,
+  sphere: <Circle size={28} />,
 };
 
 export function SolidChooser({ guess, hint, onChoose, onCancel }: { guess?: SolidType; hint?: boolean; onChoose: (t: SolidType) => void; onCancel: () => void }) {

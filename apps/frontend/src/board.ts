@@ -3,6 +3,7 @@
 import type { Stroke } from "./ink/strokes";
 import type { EdgePoint } from "./geometry/section";
 import type { SolidType } from "./geometry/solids";
+import type { CurvedMode } from "./geometry/section";
 
 export interface FunctionDef {
   id: string;
@@ -31,11 +32,17 @@ export interface GraphWidget extends WidgetBase {
 export interface SolidWidget extends WidgetBase {
   kind: "solid";
   solid: SolidType;
-  rotation: [number, number, number, number]; // kuaternion x, y, z, w
+  rotation: [number, number, number, number];
   picks: EdgePoint[];
   sphere: "none" | "in" | "out";
   mode: "rotate" | "points";
   labels: boolean;
+  /** Override ukuran (rusuk, jari-jari, tinggi) untuk slider ukuran. */
+  dimsOverride?: Record<string, number>;
+  /** Untuk bangun lengkung: mode dan parameter irisan. */
+  curvedSection?: { mode: CurvedMode; offset: number; angle: number };
+  /** 0..1: 0 = 3D utuh, 1 = jaring-jaring datar (polihedron saja). */
+  netAmount?: number;
 }
 
 export interface SectionWidget extends WidgetBase {

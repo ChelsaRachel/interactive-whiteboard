@@ -163,14 +163,25 @@ export default function App({ user, onLogout }: { user: AuthUser; onLogout: () =
   };
 
   const createSolid = (type: SolidType, bbox?: BBox, removeStrokes?: string[]) => {
-    const side = bbox ? Math.min(460, Math.max(320, Math.max(bbox.w, bbox.h) * 1.3)) : 380;
-    const w = side, h = side + 64;
+    const curved = type === "sphere" || type === "cylinder" || type === "cone";
+    const baseW = curved ? 420 : 360, baseH = curved ? 520 : 460;
+    const w = baseW, h = baseH;
     const pos = bbox ? clampRect(bbox.x + bbox.w / 2 - w / 2, bbox.y + bbox.h / 2 - h / 2, w, h) : placeCenter(w, h);
     const widget: SolidWidget = {
       id: uid("b"), kind: "solid", ...pos, w, h,
-      solid: type, rotation: initialRotation(), picks: [], sphere: "none", mode: "points", labels: true,
+      solid: type, rotation: initialRotation(), picks: [], sphere: "none",
+      mode: curved ? "rotate" : "points", labels: true,
     };
-    dispatch({ type: "addWidget", widget, removeStrokes });
+    const actions: Action[] = [{ type: "addWidget", widget, removeStrokes }];
+    // Untuk bangun lengkung, sekaligus buka widget irisan agar bentuk penampang terlihat.
+    if (curved) {
+      const sw = 320, sh = 320;
+      actions.push({
+        type: "addWidget",
+        widget: { id: uid("i"), kind: "section", solidId: widget.id, w: sw, h: sh, ...placeBeside(widget, sw, sh) },
+      });
+    }
+    dispatch({ type: "batch", actions });
     clearSelection();
   };
 
